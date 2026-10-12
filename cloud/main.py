@@ -1,5 +1,5 @@
 """
-main.py - FastAPI application untuk Moodle Activity API
+main.py - FastAPI dengan UnB + OULAD data source
 """
 
 from fastapi import FastAPI, Depends, HTTPException, Query
@@ -7,28 +7,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 from datetime import datetime, timezone
-from typing import Optional
 
 from config import APP_NAME, APP_VERSION, CORS_ORIGINS
 from database import engine, get_db, Base
-from models import Event
-from schemas import EventCreate, EventResponse, EventBatch, StatsResponse
+from models import (
+    Event, Forum, Quiz, Note, User,
+    OuladVle, OuladAssessment, OuladStudent, OuladCourse, OuladRegistration,
+)
+from schemas import (
+    EventBatch, ForumBatch, QuizBatch, NoteBatch, UserBatch,
+    OuladVleBatch, OuladAssessmentBatch, OuladStudentBatch,
+    OuladCourseBatch, OuladRegistrationBatch,
+)
 
-# ============================================================
-# CREATE TABLES
-# ============================================================
 Base.metadata.create_all(bind=engine)
 
-# ============================================================
-# APP
-# ============================================================
 app = FastAPI(
     title=APP_NAME,
     version=APP_VERSION,
-    description="API gateway untuk Moodle activity data",
+    description="API gateway untuk UnB + OULAD data",
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -39,193 +38,227 @@ app.add_middleware(
 
 
 # ============================================================
-# ENDPOINTS
+# ROOT
 # ============================================================
 @app.get("/")
 def root():
     return {
         "service": APP_NAME,
         "version": APP_VERSION,
-        "endpoints": [
-            "GET  /health",
-            "POST /api/activities",
+        "datasets": {
+            "UnB": ["events", "forum", "quiz", "notes", "users"],
+            "OULAD": ["oulad_vle", "oulad_assessment", "oulad_students",
+                      "oulad_courses", "oulad_registration"],
+        },
+        "endpoints_unb": [
             "POST /api/activities/batch",
-            "GET  /api/activities/kafka-format/since/{last_id}",
-            "GET  /api/stats",
-            "GET  /api/events",
-        ]
+            "POST /api/forum/batch",
+            "POST /api/quiz/batch",
+            "POST /api/notes/batch",
+            "POST /api/users/batch",
+        ],
+        "endpoints_oulad": [
+            "POST /api/oulad/vle/batch",
+            "POST /api/oulad/assessment/batch",
+            "POST /api/oulad/students/batch",
+            "POST /api/oulad/courses/batch",
+            "POST /api/oulad/registration/batch",
+        ],
     }
 
 
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
-    """Health check dengan verifikasi database."""
     try:
-        count = db.query(func.count(Event.id)).scalar()
+        tables = {
+            # UnB
+            "events": db.query(func.count(Event.id)).scalar(),
+            "forum": db.query(func.count(Forum.id)).scalar(),
+            "quiz": db.query(func.count(Quiz.id)).scalar(),
+            "notes": db.query(func.count(Note.id)).scalar(),
+            "users": db.query(func.count(User.id)).scalar(),
+            # OULAD
+            "oulad_vle": db.query(func.count(OuladVle.id)).scalar(),
+            "oulad_assessment": db.query(func.count(OuladAssessment.id)).scalar(),
+            "oulad_students": db.query(func.count(OuladStudent.id)).scalar(),
+            "oulad_courses": db.query(func.count(OuladCourse.id)).scalar(),
+            "oulad_registration": db.query(func.count(OuladRegistration.id)).scalar(),
+        }
         return {
             "status": "ok",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "database": "connected",
-            "total_events": count,
+            "tables": tables,
+            "total": sum(tables.values()),
         }
     except Exception as e:
-        return {
-            "status": "degraded",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "database": "error",
-            "error": str(e),
-        }
+        return {"status": "degraded", "error": str(e)}
 
 
-@app.post("/api/activities", response_model=dict, status_code=201)
-def post_activity(event: EventCreate, db: Session = Depends(get_db)):
-    """Terima 1 event dari bot."""
-    try:
-        db_event = Event(
-            sequence=event.sequence,
-            user_hash=event.user_hash,
-            courseid=event.courseid,
-            component=event.component,
-            eventname=event.eventname,
-            action=event.action,
-            target=event.target,
-            timecreated=event.timecreated,
-            event_time=event.event_time,
-            bot_name=event.bot_name,
-            source=event.source,
-            ingested_at=event.ingested_at,
-        )
-        db.add(db_event)
-        db.commit()
-        db.refresh(db_event)
-
-        return {
-            "status": "ok",
-            "id": db_event.id,
-            "total": db.query(func.count(Event.id)).scalar(),
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
+# ============================================================
+# UNB ENDPOINTS
+# ============================================================
 @app.post("/api/activities/batch", status_code=201)
-def post_activity_batch(batch: EventBatch, db: Session = Depends(get_db)):
-    """Terima batch event."""
+def post_events(batch: EventBatch, db: Session = Depends(get_db)):
     try:
-        db_events = []
-        for event in batch.events:
-            db_events.append(Event(
-                sequence=event.sequence,
-                user_hash=event.user_hash,
-                courseid=event.courseid,
-                component=event.component,
-                eventname=event.eventname,
-                action=event.action,
-                target=event.target,
-                timecreated=event.timecreated,
-                event_time=event.event_time,
-                bot_name=event.bot_name,
-                source=event.source,
-                ingested_at=event.ingested_at,
-            ))
-        db.add_all(db_events)
+        items = [Event(**e.dict()) for e in batch.events]
+        db.add_all(items)
         db.commit()
-
-        return {
-            "status": "ok",
-            "inserted": len(db_events),
-            "total": db.query(func.count(Event.id)).scalar(),
-        }
+        return {"status": "ok", "inserted": len(items),
+                "total": db.query(func.count(Event.id)).scalar()}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/activities/kafka-format/since/{last_id}")
-def get_kafka_format(
-    last_id: int,
-    limit: int = Query(100, ge=1, le=1000),
-    db: Session = Depends(get_db)
-):
-    """Ambil event dengan ID > last_id (untuk polling producer)."""
-    events = (
-        db.query(Event)
-        .filter(Event.id > last_id)
-        .order_by(Event.id.asc())
-        .limit(limit)
-        .all()
-    )
-
-    next_last_id = events[-1].id if events else last_id
-
-    return {
-        "last_id": last_id,
-        "count": len(events),
-        "next_last_id": next_last_id,
-        "events": [e.to_dict() for e in events],
-    }
+@app.post("/api/forum/batch", status_code=201)
+def post_forum(batch: ForumBatch, db: Session = Depends(get_db)):
+    try:
+        items = [Forum(**e.dict()) for e in batch.events]
+        db.add_all(items)
+        db.commit()
+        return {"status": "ok", "inserted": len(items),
+                "total": db.query(func.count(Forum.id)).scalar()}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats", response_model=StatsResponse)
+@app.post("/api/quiz/batch", status_code=201)
+def post_quiz(batch: QuizBatch, db: Session = Depends(get_db)):
+    try:
+        items = [Quiz(**e.dict()) for e in batch.events]
+        db.add_all(items)
+        db.commit()
+        return {"status": "ok", "inserted": len(items),
+                "total": db.query(func.count(Quiz.id)).scalar()}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notes/batch", status_code=201)
+def post_notes(batch: NoteBatch, db: Session = Depends(get_db)):
+    try:
+        items = [Note(**e.dict()) for e in batch.events]
+        db.add_all(items)
+        db.commit()
+        return {"status": "ok", "inserted": len(items),
+                "total": db.query(func.count(Note.id)).scalar()}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/users/batch", status_code=201)
+def post_users(batch: UserBatch, db: Session = Depends(get_db)):
+    try:
+        items = [User(**e.dict()) for e in batch.events]
+        db.add_all(items)
+        db.commit()
+        return {"status": "ok", "inserted": len(items),
+                "total": db.query(func.count(User.id)).scalar()}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# OULAD ENDPOINTS
+# ============================================================
+@app.post("/api/oulad/vle/batch", status_code=201)
+def post_oulad_vle(batch: OuladVleBatch, db: Session = Depends(get_db)):
+    try:
+        items = [OuladVle(**e.dict()) for e in batch.events]
+        db.add_all(items)
+        db.commit()
+        return {"status": "ok", "source": "studentVle.csv",
+                "inserted": len(items),
+                "total": db.query(func.count(OuladVle.id)).scalar()}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/oulad/assessment/batch", status_code=201)
+def post_oulad_assessment(batch: OuladAssessmentBatch, db: Session = Depends(get_db)):
+    try:
+        items = [OuladAssessment(**e.dict()) for e in batch.events]
+        db.add_all(items)
+        db.commit()
+        return {"status": "ok", "source": "studentAssessment.csv",
+                "inserted": len(items),
+                "total": db.query(func.count(OuladAssessment.id)).scalar()}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/oulad/students/batch", status_code=201)
+def post_oulad_students(batch: OuladStudentBatch, db: Session = Depends(get_db)):
+    try:
+        items = [OuladStudent(**e.dict()) for e in batch.events]
+        db.add_all(items)
+        db.commit()
+        return {"status": "ok", "source": "studentInfo.csv",
+                "inserted": len(items),
+                "total": db.query(func.count(OuladStudent.id)).scalar()}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/oulad/courses/batch", status_code=201)
+def post_oulad_courses(batch: OuladCourseBatch, db: Session = Depends(get_db)):
+    try:
+        items = [OuladCourse(**e.dict()) for e in batch.events]
+        db.add_all(items)
+        db.commit()
+        return {"status": "ok", "source": "courses.csv",
+                "inserted": len(items),
+                "total": db.query(func.count(OuladCourse.id)).scalar()}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/oulad/registration/batch", status_code=201)
+def post_oulad_registration(batch: OuladRegistrationBatch, db: Session = Depends(get_db)):
+    try:
+        items = [OuladRegistration(**e.dict()) for e in batch.events]
+        db.add_all(items)
+        db.commit()
+        return {"status": "ok", "source": "studentRegistration.csv",
+                "inserted": len(items),
+                "total": db.query(func.count(OuladRegistration.id)).scalar()}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# STATS
+# ============================================================
+@app.get("/api/stats")
 def stats(db: Session = Depends(get_db)):
-    """Statistik keseluruhan."""
-    total = db.query(func.count(Event.id)).scalar()
-    unique_users = db.query(func.count(func.distinct(Event.user_hash))).scalar()
-    unique_courses = db.query(func.count(func.distinct(Event.courseid))).scalar()
-
-    top_events = (
-        db.query(Event.eventname, func.count(Event.id).label("count"))
-        .group_by(Event.eventname)
-        .order_by(desc("count"))
-        .limit(10)
-        .all()
-    )
-
-    top_courses = (
-        db.query(Event.courseid, func.count(Event.id).label("count"))
-        .group_by(Event.courseid)
-        .order_by(desc("count"))
-        .limit(10)
-        .all()
-    )
-
-    return StatsResponse(
-        total_events=total,
-        unique_users=unique_users,
-        unique_courses=unique_courses,
-        top_events=[[e[0], e[1]] for e in top_events],
-        top_courses=[[c[0], c[1]] for c in top_courses],
-    )
-
-
-@app.get("/api/events")
-def list_events(
-    limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db)
-):
-    """List event dengan paginasi."""
-    events = (
-        db.query(Event)
-        .order_by(Event.id.asc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-
     return {
-        "total": db.query(func.count(Event.id)).scalar(),
-        "offset": offset,
-        "limit": limit,
-        "count": len(events),
-        "events": [e.to_dict() for e in events],
+        "unb": {
+            "events": db.query(func.count(Event.id)).scalar(),
+            "forum": db.query(func.count(Forum.id)).scalar(),
+            "quiz": db.query(func.count(Quiz.id)).scalar(),
+            "notes": db.query(func.count(Note.id)).scalar(),
+            "users": db.query(func.count(User.id)).scalar(),
+        },
+        "oulad": {
+            "vle": db.query(func.count(OuladVle.id)).scalar(),
+            "assessment": db.query(func.count(OuladAssessment.id)).scalar(),
+            "students": db.query(func.count(OuladStudent.id)).scalar(),
+            "courses": db.query(func.count(OuladCourse.id)).scalar(),
+            "registration": db.query(func.count(OuladRegistration.id)).scalar(),
+        },
     }
 
 
-# ============================================================
-# RUN
-# ============================================================
 if __name__ == "__main__":
     import os
     import uvicorn
