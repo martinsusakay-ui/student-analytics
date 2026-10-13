@@ -1,0 +1,67 @@
+URUTAN MENJALANKAN SEMUA
+Buka 6 terminal di folder yang sesuai:
+
+
+Terminal 1 — Docker (Kafka + MongoDB)
+cmd
+docker start zookeeper
+timeout /t 5
+docker start kafka
+timeout /t 10
+docker start mongodb
+docker start mongo-express
+Verifikasi:
+
+
+docker ps
+docker exec -it kafka kafka-topics --list --bootstrap-server localhost:9092
+Terminal 2 — Bot Replay
+
+
+cd C:\Users\User\student-analytics\bot
+python bot_replay.py
+Output: [INFO] FastAPI online ✓ → mulai kirim ke Railway.
+
+
+Terminal 3 — Kafka Producer
+cd C:\Users\User\student-analytics\pipeline
+python kafka_producer.py
+Output: [POLL #1] +100 events | last_id=100 | ...
+
+
+Terminal 4 — Spark Streaming
+
+
+cd C:\Users\User\student-analytics\pipeline
+python spark_streaming.py
+Output: [MONGO] Batch 1: X docs -> events
+
+
+Terminal 5 — Dashboard Streamlit
+
+mdccd C:\Users\User\student-analytics\dashboard
+streamlit run app.py
+Output: Local URL: http://localhost:8501
+
+
+Terminal 6 — Monitoring MongoDB
+
+docker exec -it mongodb mongo -u admin -p admin123 --authenticationDatabase admin moodle_analytics --eval "print('events:', db.events.count()); print('metrics_1min:', db.metrics_1min.count()); print('metrics_5min:', db.metrics_5min.count())"
+Jalankan berulang untuk lihat count bertambah.
+
+
+📋 CHECKLIST URUTAN
+Urutan	Terminal	Aksi	Status
+1	T1	docker start semua container	⏳
+2	T2	python bot_replay.py	⏳
+3	T3	python kafka_producer.py	⏳
+4	T4	python spark_streaming.py	⏳
+5	T5	streamlit run app.py	⏳
+6	T6	Cek MongoDB count	⏳
+🔗 AKSES URL
+Service	URL
+Dashboard	http://localhost:8501
+Mongo Express	http://localhost:8081
+Railway API	https://web-production-97daa8.up.railway.app
+Railway Health	https://web-production-97daa8.up.railway.app/health
+Railway Stats	https://web-production-97daa8.up.railway.app/api/stats
