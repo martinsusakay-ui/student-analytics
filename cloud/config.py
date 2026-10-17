@@ -6,26 +6,36 @@ import os
 from pathlib import Path
 
 # ============================================================
-# ENVIRONMENT
+# ENVIRONMENT & DATABASE URL
 # ============================================================
-# Ambil dari environment
+# Ambil dari environment dan bersihkan spasi tersembunyi
 _env_url = os.getenv("DATABASE_URL", "").strip()
 
-# 1. Jika kosong, gunakan fallback localhost (untuk testing lokal)
+# Cek apakah kita sedang berjalan di Railway
+IS_RAILWAY = os.getenv("RAILWAY_ENVIRONMENT") is not None
+
 if not _env_url:
-    DATABASE_URL = "postgresql://postgres:password@localhost:5432/moodle_analytics"
+    if IS_RAILWAY:
+        # Jika di Railway tapi URL kosong, JANGAN pakai localhost! Langsung error.
+        raise ValueError("CRITICAL: DATABASE_URL is empty in Railway! Please check your Variables Reference.")
+    else:
+        # Hanya gunakan localhost jika Anda menjalankan kode di laptop/PC sendiri
+        DATABASE_URL = "postgresql://postgres:password@localhost:5432/moodle_analytics"
+        print("[CONFIG] Warning: Using localhost fallback for local testing.")
 else:
-    # 2. Bersihkan tanda kutip jika tidak sengaja ter-copy
+    # Bersihkan tanda kutip jika tidak sengaja ter-copy
     _env_url = _env_url.strip('"').strip("'")
     
-    # 3. PostgreSQL butuh prefix postgresql:// (bukan postgres://)
+    # PostgreSQL butuh prefix postgresql:// (bukan postgres://)
     if _env_url.startswith("postgres://"):
         DATABASE_URL = _env_url.replace("postgres://", "postgresql://", 1)
     else:
         DATABASE_URL = _env_url
 
-# (Opsional) Tambahkan print agar kita bisa melihatnya di log Railway
-print(f"[CONFIG] DB Scheme: {DATABASE_URL.split('://')[0] if DATABASE_URL else 'EMPTY'}")
+# Print untuk debugging di Railway Logs
+# (Hanya menampilkan skema, tidak menampilkan password/host rahasia)
+_scheme = DATABASE_URL.split('://')[0] if DATABASE_URL else 'EMPTY'
+print(f"[CONFIG] DB Scheme Detected: {_scheme}")
 
 # ============================================================
 # APP CONFIG
