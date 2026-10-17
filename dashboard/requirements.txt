@@ -1,6 +1,5 @@
+streamlit
+pymongo
 pandas
 numpy
-matplotlib
-seaborn
-pymongo
 scikit-learn

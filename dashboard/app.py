@@ -1,6 +1,6 @@
 """
-app.py - Moodle Activity Dashboard (MongoDB)
-UnB + OULAD dengan ML Analytics
+app.py - Dashboard Prediksaun Dezempenhu Estudante
+Pipeline Big Data Real-Time | UnB + OULAD
 """
 
 import streamlit as st
@@ -18,17 +18,17 @@ from ml_oulad import run_oulad_classification
 
 
 # ============================================================
-# PAGE CONFIG
+# KONFIGURASAUN PÁJINA
 # ============================================================
 st.set_page_config(
-    page_title="Moodle Activity Dashboard",
-    page_icon="📊",
+    page_title="Prediksaun Dezempenhu Estudante",
+    page_icon="🎓",
     layout="wide"
 )
 
 
 # ============================================================
-# MONGODB CONNECTION
+# KONEKSAUN MONGODB
 # ============================================================
 @st.cache_resource
 def get_mongo_client():
@@ -54,28 +54,12 @@ def load_events(limit: int = 50000) -> pd.DataFrame:
             df["event_time"] = pd.to_datetime(df["event_time"], errors="coerce")
         return df
     except Exception as e:
-        st.error(f"Error load events: {e}")
-        return pd.DataFrame()
-
-
-@st.cache_data(ttl=CONFIG["refresh_seconds"])
-def load_notes() -> pd.DataFrame:
-    """Load notes dari MongoDB (nilai UnB)."""
-    try:
-        collection = get_collection("notes")
-        cursor = collection.find({}, {"_id": 0}).limit(50000)
-        records = list(cursor)
-        if not records:
-            return pd.DataFrame()
-        return pd.DataFrame(records)
-    except Exception as e:
-        st.error(f"Error load notes: {e}")
+        st.error(f"Erru load events: {e}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=CONFIG["refresh_seconds"])
 def load_oulad_collection(name: str, limit: int = 50000) -> pd.DataFrame:
-    """Load OULAD collection dari MongoDB."""
     try:
         collection = get_collection(name)
         cursor = collection.find({}, {"_id": 0}).limit(limit)
@@ -84,7 +68,7 @@ def load_oulad_collection(name: str, limit: int = 50000) -> pd.DataFrame:
             return pd.DataFrame()
         return pd.DataFrame(records)
     except Exception as e:
-        st.error(f"Error load {name}: {e}")
+        st.error(f"Erru load {name}: {e}")
         return pd.DataFrame()
 
 
@@ -98,55 +82,125 @@ def get_collection_count(name: str) -> int:
 # ============================================================
 # HEADER
 # ============================================================
-st.title("📊 Moodle Activity Real-Time Dashboard")
+st.title("🎓 Sistema Prediksaun Dezempenhu Estudante")
 st.caption(
-    f"MongoDB: `{CONFIG['mongo_db']}` | "
-    f"Refresh: every **{CONFIG['refresh_seconds']}s** | "
-    f"Last update: {datetime.now().strftime('%H:%M:%S')}"
+    f"Pipeline Big Data Real-Time | UnB + OULAD | "
+    f"MongoDB konektadu | Refresh: {CONFIG['refresh_seconds']}s | "
+    f"Atualiza: {datetime.now().strftime('%H:%M:%S')}"
 )
 
 try:
     client = get_mongo_client()
     client.admin.command("ping")
-    st.success("✅ MongoDB connected")
+    st.success("✅ MongoDB konektadu")
 except Exception as e:
-    st.error(f"❌ MongoDB connection failed: {e}")
+    st.error(f"❌ MongoDB la konektadu: {e}")
     st.stop()
 
 
 # ============================================================
-# KPI CARDS
+# LOAD DATA
 # ============================================================
 events_count = get_collection_count(CONFIG["collection_events"])
 df_events = load_events()
 
+oulad_vle_count = get_collection_count("oulad_vle")
+oulad_students_count = get_collection_count("oulad_students")
+oulad_assessment_count = get_collection_count("oulad_assessment")
+oulad_registration_count = get_collection_count("oulad_registration")
+
+df_oulad_students = load_oulad_collection("oulad_students")
+df_oulad_vle = load_oulad_collection("oulad_vle")
+df_oulad_assessment = load_oulad_collection("oulad_assessment")
+
+
+# ============================================================
+# 1. ALERTA / NOTIFIKASAUN
+# ============================================================
+st.header("🚨 Alerta / Notifikasaun")
+
+# Cek prediksaun UnB — estudante ho nota kiik
+unb_result = None
+if not df_events.empty:
+    try:
+        unb_result = run_unb_regression(df_events)
+    except:
+        unb_result = None
+
+# Cek prediksaun OULAD — estudante Withdrawn
+oulad_result = None
+if not df_oulad_students.empty:
+    try:
+        oulad_result = run_oulad_classification(
+            df_oulad_vle, df_oulad_assessment, df_oulad_students
+        )
+    except:
+        oulad_result = None
+
+col_alert1, col_alert2 = st.columns(2)
+
+with col_alert1:
+    if unb_result and "error" not in unb_result:
+        # Estudante ho predicted < 5 (proxy)
+        samples = unb_result.get("sample_predictions", [])
+        high_risk = [s for s in samples if s.get("predicted", 0) < 5]
+        if high_risk:
+            st.warning(
+                f"⚠️ {len(high_risk)} estudante prediksaun iha risku "
+                f"(nota < 5) — UnB"
+            )
+        else:
+            st.success("✅ La iha estudante iha risku — UnB")
+    else:
+        st.info("⏳ Seidauk iha prediksaun UnB")
+
+with col_alert2:
+    if oulad_result and "error" not in oulad_result:
+        samples = oulad_result.get("sample_predictions", [])
+        withdrawn = [s for s in samples if s.get("predicted") == "Withdrawn"]
+        if withdrawn:
+            st.warning(
+                f"⚠️ {len(withdrawn)} estudante prediksaun Withdrawn — OULAD"
+            )
+        else:
+            st.success("✅ La iha estudante Withdrawn — OULAD")
+    else:
+        st.info("⏳ Seidauk iha prediksaun OULAD")
+
+
+# ============================================================
+# 2. ANÁLITIKA DESKRITIVA
+# ============================================================
+st.header("📊 Análitika Deskritiva")
+
+total_records = (
+    events_count + oulad_vle_count + oulad_students_count
+    + oulad_assessment_count + oulad_registration_count
+)
+
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    st.metric("📥 Total Events", f"{events_count:,}")
+    st.metric("📥 Eventu", f"{events_count:,}")
 with col2:
     if not df_events.empty and "user_hash" in df_events.columns:
-        st.metric("👥 Unique Users", f"{df_events['user_hash'].nunique():,}")
+        st.metric("👥 Uzuáriu", f"{df_events['user_hash'].nunique():,}")
     else:
-        st.metric("👥 Unique Users", "0")
+        st.metric("👥 Uzuáriu", "0")
 with col3:
     if not df_events.empty and "courseid" in df_events.columns:
-        st.metric("📚 Courses", f"{df_events['courseid'].nunique():,}")
+        st.metric("📚 Kursu", f"{df_events['courseid'].nunique():,}")
     else:
-        st.metric("📚 Courses", "0")
+        st.metric("📚 Kursu", "0")
 with col4:
-    if not df_events.empty and "eventname" in df_events.columns:
-        st.metric("⚡ Event Types", f"{df_events['eventname'].nunique():,}")
-    else:
-        st.metric("⚡ Event Types", "0")
-
-st.divider()
+    st.metric("📋 Rejistu", f"{total_records:,}")
 
 
 # ============================================================
-# EVENT TIMELINE
+# 3. ANÁLIZE TENDÉNSIA
 # ============================================================
-st.subheader("📈 Event Timeline (per minute)")
+st.header("📈 Análize Tendénsia")
+st.caption("Timeline eventu kada minutu")
 
 if not df_events.empty and "event_time" in df_events.columns:
     df_time = df_events.dropna(subset=["event_time"]).copy()
@@ -155,286 +209,194 @@ if not df_events.empty and "event_time" in df_events.columns:
         if not timeline.empty:
             st.line_chart(timeline)
         else:
-            st.info("No timeline data")
+            st.info("La iha dadus timeline")
     else:
-        st.info("No valid timestamp")
+        st.info("La iha timestamp válidu")
 else:
-    st.info("⏳ Menunggu data...")
-
-st.divider()
+    st.info("⏳ Hein dadus...")
 
 
 # ============================================================
-# ACTIVITY HEATMAP
+# 4. ANÁLIZE ESTATÍSTIKA
 # ============================================================
-st.subheader("🔥 Activity Heatmap (Hour × Day)")
+st.header("📊 Análize Estatístika")
+st.caption("Distribuisaun tipu eventu")
 
-if not df_events.empty and "event_time" in df_events.columns:
-    df_time = df_events.dropna(subset=["event_time"]).copy()
-    if not df_time.empty:
-        df_time["hour"] = df_time["event_time"].dt.hour
-        df_time["day"] = df_time["event_time"].dt.day_name()
-        
-        day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        heatmap_data = df_time.groupby(["day", "hour"]).size().unstack(fill_value=0)
-        heatmap_data = heatmap_data.reindex([d for d in day_order if d in heatmap_data.index])
-        
-        st.write("**Aktivitas per Jam × Hari**")
-        st.dataframe(
-            heatmap_data.style.background_gradient(cmap="YlOrRd", axis=None),
-            use_container_width=True
-        )
-        
-        st.write("**Aktivitas per Jam (agregat)**")
-        hourly = df_time.groupby("hour").size()
-        st.bar_chart(hourly)
+if not df_events.empty and "eventname" in df_events.columns:
+    event_counts = df_events["eventname"].value_counts().head(10)
+    event_counts.index = [
+        e.split("\\")[-1] if "\\" in e else e
+        for e in event_counts.index
+    ]
+    st.bar_chart(event_counts)
+else:
+    st.info("⏳ Hein dadus...")
+
+
+# ============================================================
+# 5. DATASET UnB — MONITORIZASAUN + PREDIKSAUN
+# ============================================================
+st.header("🔵 Dataset UnB — Monitorizasaun + Prediksaun")
+
+col_u1, col_u2, col_u3, col_u4 = st.columns(4)
+
+with col_u1:
+    st.metric("📥 Eventu", f"{events_count:,}")
+with col_u2:
+    if not df_events.empty and "user_hash" in df_events.columns:
+        st.metric("👥 Uzuáriu", f"{df_events['user_hash'].nunique():,}")
     else:
-        st.info("No valid timestamp data")
-else:
-    st.info("⏳ Menunggu data...")
+        st.metric("👥 Uzuáriu", "0")
+with col_u3:
+    if not df_events.empty and "courseid" in df_events.columns:
+        st.metric("📚 Kursu", f"{df_events['courseid'].nunique():,}")
+    else:
+        st.metric("📚 Kursu", "0")
+with col_u4:
+    if not df_events.empty and "eventname" in df_events.columns:
+        st.metric("⚡ Tipu Eventu", f"{df_events['eventname'].nunique():,}")
+    else:
+        st.metric("⚡ Tipu Eventu", "0")
 
 st.divider()
 
+st.subheader("🎯 Prediksaun Nota (Regression)")
+st.caption("Modelu: Random Forest Regressor | Target: avg_grade")
 
-# ============================================================
-# USER ENGAGEMENT DISTRIBUTION
-# ============================================================
-st.subheader("📊 User Engagement Distribution")
-st.caption("Histogram: total events per user")
+if unb_result and "error" not in unb_result:
+    st.info(f"📊 {unb_result.get('note', '')}")
 
-if not df_events.empty and "user_hash" in df_events.columns:
-    user_events = df_events.groupby("user_hash").size()
-    
-    col_e1, col_e2, col_e3, col_e4 = st.columns(4)
-    with col_e1:
-        st.metric("Total Users", f"{len(user_events):,}")
-    with col_e2:
-        st.metric("Mean Events/User", f"{user_events.mean():.1f}")
-    with col_e3:
-        st.metric("Median Events/User", f"{user_events.median():.0f}")
-    with col_e4:
-        st.metric("Max Events/User", f"{user_events.max():,}")
-    
-    st.write("**Histogram Distribusi**")
-    hist, bin_edges = np.histogram(user_events, bins=20)
-    df_hist = pd.DataFrame({
-        "Bin": [f"{int(bin_edges[i])}-{int(bin_edges[i+1])}" for i in range(len(hist))],
-        "Users": hist
-    })
-    df_hist = df_hist.set_index("Bin")
-    st.bar_chart(df_hist)
-    
-    st.write("**Distribusi per Kategori**")
-    categories = {
-        "Low (1-5 events)": (user_events <= 5).sum(),
-        "Medium (6-20 events)": ((user_events > 5) & (user_events <= 20)).sum(),
-        "High (21-50 events)": ((user_events > 20) & (user_events <= 50)).sum(),
-        "Very High (>50 events)": (user_events > 50).sum(),
-    }
-    df_cat = pd.DataFrame({
-        "Kategori": list(categories.keys()),
-        "Users": list(categories.values())
-    })
-    df_cat["Persentase"] = (df_cat["Users"] / len(user_events) * 100).round(2)
-    st.dataframe(df_cat, use_container_width=True, hide_index=True)
+    col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+    with col_p1:
+        st.metric("R² Score", f"{unb_result['metrics']['r2_score']:.4f}")
+    with col_p2:
+        st.metric("MAE", f"{unb_result['metrics']['mae']:.4f}")
+    with col_p3:
+        st.metric("RMSE", f"{unb_result['metrics']['rmse']:.4f}")
+    with col_p4:
+        st.metric("Amostra", f"{unb_result['n_samples']}")
+
+    st.divider()
+
+    st.write("**Importánsia Fitur**")
+    if unb_result.get("feature_importance"):
+        df_imp = pd.DataFrame(unb_result["feature_importance"])
+        df_imp = df_imp.set_index("feature")["importance"].sort_values(ascending=True)
+        st.bar_chart(df_imp)
+
+    st.write("**Ezemplu Prediksaun**")
+    df_pred = pd.DataFrame(unb_result.get("sample_predictions", []))
+    if not df_pred.empty:
+        st.dataframe(df_pred, use_container_width=True, hide_index=True)
+elif unb_result and "error" in unb_result:
+    st.warning(unb_result["error"])
 else:
-    st.info("⏳ Menunggu data...")
+    st.info("⏳ Hein dadus UnB...")
+
+
+# ============================================================
+# 6. DATASET OULAD — MONITORIZASAUN + PREDIKSAUN
+# ============================================================
+st.header("🟢 Dataset OULAD — Monitorizasaun + Prediksaun")
+
+col_o1, col_o2, col_o3, col_o4 = st.columns(4)
+
+with col_o1:
+    st.metric("📥 VLE", f"{oulad_vle_count:,}")
+with col_o2:
+    st.metric("🎓 Estudante", f"{oulad_students_count:,}")
+with col_o3:
+    st.metric("📝 Assessment", f"{oulad_assessment_count:,}")
+with col_o4:
+    st.metric("📋 Rejistu", f"{oulad_registration_count:,}")
 
 st.divider()
 
+st.subheader("Distribuisaun Rezultadu Final")
+if not df_oulad_students.empty and "final_result" in df_oulad_students.columns:
+    result_counts = df_oulad_students["final_result"].value_counts()
+    st.bar_chart(result_counts)
+else:
+    st.info("⏳ Hein dadus OULAD...")
 
-# ============================================================
-# TOP USERS
-# ============================================================
-st.subheader("🏆 Top Users (Paling Aktif)")
+st.divider()
 
-if not df_events.empty and "user_hash" in df_events.columns:
-    top_users = (
-        df_events.groupby("user_hash")
-        .agg(
-            total_events=("eventname", "count"),
-            unique_events=("eventname", "nunique"),
-            unique_courses=("courseid", "nunique"),
+st.subheader("🎯 Prediksaun Graduasaun (Classification)")
+st.caption("Modelu: Random Forest Classifier | Target: final_result")
+
+if oulad_result and "error" not in oulad_result:
+    st.info(f"🎯 Klase: {', '.join(oulad_result.get('classes', []))}")
+
+    col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+    with col_c1:
+        st.metric("Akurasa", f"{oulad_result['metrics']['accuracy']:.2%}")
+    with col_c2:
+        st.metric("Presizaun", f"{oulad_result['metrics']['precision']:.2%}")
+    with col_c3:
+        st.metric("Rekall", f"{oulad_result['metrics']['recall']:.2%}")
+    with col_c4:
+        st.metric("Skor F1", f"{oulad_result['metrics']['f1_score']:.2%}")
+
+    st.divider()
+
+    st.write("**Importánsia Fitur**")
+    if oulad_result.get("feature_importance"):
+        df_imp = pd.DataFrame(oulad_result["feature_importance"])
+        df_imp = df_imp.set_index("feature")["importance"].sort_values(ascending=True)
+        st.bar_chart(df_imp)
+
+    st.write("**Matriz Konfusaun**")
+    if oulad_result.get("confusion_matrix"):
+        cm = np.array(oulad_result["confusion_matrix"])
+        df_cm = pd.DataFrame(
+            cm,
+            index=[f"Atuál: {c}" for c in oulad_result["classes"]],
+            columns=[f"Prediksaun: {c}" for c in oulad_result["classes"]],
         )
-        .sort_values("total_events", ascending=False)
-        .head(10)
-        .reset_index()
-    )
-    
-    top_users["user_hash"] = top_users["user_hash"].str[:16] + "..."
-    top_users = top_users.rename(columns={
-        "user_hash": "User",
-        "total_events": "Total Events",
-        "unique_events": "Event Types",
-        "unique_courses": "Courses",
-    })
-    
-    st.dataframe(top_users, use_container_width=True, hide_index=True)
-    
-    st.write("**Top 10 Users — Total Events**")
-    df_top_chart = top_users.set_index("User")["Total Events"]
-    st.bar_chart(df_top_chart)
+        st.dataframe(df_cm, use_container_width=True)
+
+    st.write("**Ezemplu Prediksaun**")
+    df_pred_oulad = pd.DataFrame(oulad_result.get("sample_predictions", []))
+    if not df_pred_oulad.empty:
+        st.dataframe(df_pred_oulad, use_container_width=True, hide_index=True)
+elif oulad_result and "error" in oulad_result:
+    st.warning(oulad_result["error"])
 else:
-    st.info("⏳ Menunggu data...")
-
-st.divider()
+    st.info("⏳ Hein dadus OULAD...")
 
 
 # ============================================================
-# TOP 10 LAST ACTIVITY
+# 7. MONITORIZASAUN REAL-TIME
 # ============================================================
-st.subheader("🕐 Top 10 Last Activity")
-st.caption("10 aktivitas terbaru")
+st.header("🔄 Monitorizasaun Real-Time")
+st.caption("Atividade estudante ne'ebé tama ona ba MongoDB")
 
+# Tabela atividade foun
 if not df_events.empty:
-    df_last = df_events.copy()
-    if "event_time" in df_last.columns:
-        df_last = df_last.sort_values("event_time", ascending=False)
-    df_last = df_last.head(10)
-    
-    last_cols = [c for c in [
+    recent_cols = [c for c in [
         "event_time", "user_hash", "courseid", "eventname", "action"
-    ] if c in df_last.columns]
-    
-    df_display = df_last[last_cols].copy()
-    if "user_hash" in df_display.columns:
-        df_display["user_hash"] = df_display["user_hash"].str[:12] + "..."
-    if "eventname" in df_display.columns:
-        df_display["eventname"] = df_display["eventname"].apply(
+    ] if c in df_events.columns]
+
+    df_recent = df_events[recent_cols].head(20).copy()
+    if "user_hash" in df_recent.columns:
+        df_recent["user_hash"] = df_recent["user_hash"].str[:12] + "..."
+    if "eventname" in df_recent.columns:
+        df_recent["eventname"] = df_recent["eventname"].apply(
             lambda x: x.split("\\")[-1] if "\\" in x else x
         )
-    
-    df_display = df_display.rename(columns={
-        "event_time": "Time",
-        "user_hash": "User",
-        "courseid": "Course",
-        "eventname": "Event",
-        "action": "Action",
+
+    df_recent = df_recent.rename(columns={
+        "event_time": "Tempu",
+        "user_hash": "Uzuáriu",
+        "courseid": "Kursu",
+        "eventname": "Eventu",
+        "action": "Aksaun",
     })
-    
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+    st.write("**Atividade Foun (20 ikus)**")
+    st.dataframe(df_recent, use_container_width=True, hide_index=True)
 else:
-    st.info("⏳ Menunggu events...")
-
-
-# ============================================================
-# MACHINE LEARNING ANALYTICS — UNB + OULAD
-# ============================================================
-st.divider()
-st.header("🧠 Machine Learning Analytics")
-st.caption("UnB: Regression (avg_grade) • OULAD: Classification (final_result)")
-
-tab_ml1, tab_ml2 = st.tabs([
-    "📊 UnB — Regression (avg_grade)",
-    "🎓 OULAD — Classification (final_result)",
-])
-
-# ------------------------------------------------------------
-# TAB 1: UNB REGRESSION
-# ------------------------------------------------------------
-with tab_ml1:
-    st.subheader("UnB — Prediksi Nilai Mahasiswa")
-    st.caption("Model: Random Forest Regressor | Target: avg_grade")
-    
-    if not df_events.empty:
-        with st.spinner("Training Random Forest Regression..."):
-            df_notes = load_notes()
-            result = run_unb_regression(df_events, df_notes)
-        
-        if "error" in result:
-            st.warning(result["error"])
-        else:
-            st.info(f"📊 {result['note']}")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("R² Score", f"{result['metrics']['r2_score']:.4f}")
-            with col2:
-                st.metric("MAE", f"{result['metrics']['mae']:.4f}")
-            with col3:
-                st.metric("RMSE", f"{result['metrics']['rmse']:.4f}")
-            with col4:
-                st.metric("Samples", f"{result['n_samples']}")
-            
-            st.caption(
-                f"CV R²: {result['metrics']['cv_r2_mean']:.4f} "
-                f"(±{result['metrics']['cv_r2_std']:.4f}) | "
-                f"Train: {result['n_train']} | Test: {result['n_test']}"
-            )
-            
-            st.divider()
-            
-            st.write("**Feature Importance**")
-            if result["feature_importance"]:
-                df_imp = pd.DataFrame(result["feature_importance"])
-                df_imp = df_imp.set_index("feature")["importance"].sort_values(ascending=True)
-                st.bar_chart(df_imp)
-            
-            st.write("**Sample Predictions**")
-            df_pred = pd.DataFrame(result["sample_predictions"])
-            st.dataframe(df_pred, use_container_width=True, hide_index=True)
-    else:
-        st.info("⏳ Menunggu data UnB...")
-
-# ------------------------------------------------------------
-# TAB 2: OULAD CLASSIFICATION
-# ------------------------------------------------------------
-with tab_ml2:
-    st.subheader("OULAD — Prediksi Kelulusan Mahasiswa")
-    st.caption("Model: Random Forest Classifier | Target: final_result")
-    
-    df_oulad_vle = load_oulad_collection("oulad_vle", limit=100000)
-    df_oulad_assess = load_oulad_collection("oulad_assessment", limit=100000)
-    df_oulad_students = load_oulad_collection("oulad_students", limit=50000)
-    
-    if not df_oulad_students.empty:
-        with st.spinner("Training Random Forest Classification..."):
-            result = run_oulad_classification(df_oulad_vle, df_oulad_assess, df_oulad_students)
-        
-        if "error" in result:
-            st.warning(result["error"])
-        else:
-            st.info(f"🎯 Kelas: {', '.join(result['classes'])}")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Accuracy", f"{result['metrics']['accuracy']:.2%}")
-            with col2:
-                st.metric("Precision", f"{result['metrics']['precision']:.2%}")
-            with col3:
-                st.metric("Recall", f"{result['metrics']['recall']:.2%}")
-            with col4:
-                st.metric("F1 Score", f"{result['metrics']['f1_score']:.2%}")
-            
-            st.caption(
-                f"CV Accuracy: {result['metrics']['cv_accuracy_mean']:.2%} "
-                f"(±{result['metrics']['cv_accuracy_std']:.2%}) | "
-                f"Samples: {result['n_samples']} | "
-                f"Train: {result['n_train']} | Test: {result['n_test']}"
-            )
-            
-            st.divider()
-            
-            st.write("**Feature Importance**")
-            if result["feature_importance"]:
-                df_imp = pd.DataFrame(result["feature_importance"])
-                df_imp = df_imp.set_index("feature")["importance"].sort_values(ascending=True)
-                st.bar_chart(df_imp)
-            
-            st.write("**Confusion Matrix**")
-            cm = np.array(result["confusion_matrix"])
-            df_cm = pd.DataFrame(
-                cm,
-                index=[f"Actual: {c}" for c in result["classes"]],
-                columns=[f"Predicted: {c}" for c in result["classes"]],
-            )
-            st.dataframe(df_cm, use_container_width=True)
-            
-            st.write("**Sample Predictions**")
-            df_pred = pd.DataFrame(result["sample_predictions"])
-            st.dataframe(df_pred, use_container_width=True, hide_index=True)
-    else:
-        st.info("⏳ Menunggu data OULAD...")
+    st.info("⏳ Hein dadus...")
 
 
 # ============================================================
