@@ -1,0 +1,21 @@
+# Data CSV besar
+*.csv
+data/
+bot/*.csv
+
+# File Checkpoint Spark & State Kafka
+pipeline/checkpoints/
+pipeline/checkpoints_v4/
+pipeline/checkpoints_v5/
+pipeline/pipeline_state*.json
+
+# File Model ML dan Output Gambar
+dashboard/clustering_output/
+*.png
+*.joblib
+
+# File System & Cache
+__pycache__/
+*.pyc
+.env
+.DS_Store
